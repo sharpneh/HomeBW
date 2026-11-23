@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2a6fa8">
+<title>HomeBW</title>
+<style>
+:root{--bg:#f4f7fa;--card:#fff;--tx:#14202b;--mu:#55636f;--bd:#d9e1e8;--ac:#2a6fa8;--ac2:#e1eef8;--ac3:#1b4f7c;--ph:#cfe0ee;--onac:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1720;--card:#18222d;--tx:#e8eef4;--mu:#9fb0bf;--bd:#2a3745;--ac:#6db3ee;--ac2:#1c3347;--ac3:#9fd0f5;--ph:#1f3347;--onac:#0b1722}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--card);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;padding-top:env(safe-area-inset-top,0px)}
+#app{max-width:560px;margin:0 auto;padding:12px 16px 100px}
+button,input,select{font:inherit;color:var(--tx)}
+input,select{width:100%;min-height:46px;padding:0 12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg)}
+label{display:block;font-size:12px;color:var(--mu);margin:8px 0 2px}
+.b{min-height:46px;padding:0 18px;border:0;border-radius:12px;background:var(--ac);color:var(--onac);font-weight:700;cursor:pointer}
+.b.o{background:none;border:1px solid var(--bd);color:var(--tx)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.tabs{display:flex;gap:14px;overflow-x:auto;border-bottom:1px solid var(--bd);margin:10px 0}
+.tabs button{border:0;background:none;min-height:44px;white-space:nowrap;color:var(--mu);font-weight:600;border-bottom:2px solid transparent;cursor:pointer}
+.tabs button.on{color:var(--tx);border-color:var(--tx)}
+.ph{height:210px;border-radius:18px;background:var(--ph) center/cover;position:relative}
+.heart{position:absolute;top:8px;right:8px;width:44px;height:44px;border-radius:50%;border:0;background:var(--card);font-size:20px;cursor:pointer}
+.mu{color:var(--mu);font-size:14px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav button{flex:1;min-height:56px;border:0;background:none;font-weight:700;font-size:14px;color:var(--mu);cursor:pointer}
+nav button.on{color:var(--ac)}
+.msg{background:var(--ac2);color:var(--ac3);padding:10px 12px;border-radius:10px;margin:8px 0;font-size:14px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<nav id="nav"></nav>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// 1) PASTE YOUR TWO SUPABASE VALUES HERE (Project Settings > API). Never use the service_role key.
+const SB_URL = "https://ieqkdxgkyoqsxogitrhn.supabase.co";
+const SB_KEY = "sb_publishable_Dxc19RUa6thesO6K3aZVEQ_wjWRDdZ7";
+
+const ready = !SB_URL.startsWith("PASTE");
+const sb = ready ? supabase.createClient(SB_URL, SB_KEY) : null;
+const CATS = [["house","Houses"],["flat","Flats"],["room","Rooms"],["plot","Home plots"],["commercial","Commercial plots"],["farm","Farms & land"]];
+const LAND = ["plot","commercial","farm"];
+const CITIES = ["Gaborone","Francistown","Maun","Kasane","Palapye","Lobatse","Serowe","Selebi-Phikwe"];
+const TENURE = ["Freehold","Tribal land","State land"];
+const BAD = /casino|betting|forex|crypto|escort|adult|viagra|loan shark|get rich|investment scheme/i;
+const LIMITS = {free:1, alert:1, agent:15, agency:999};
+let S = {user:null, plan:"free", view:"browse", mode:"rent", cat:"house", city:"", max:"", list:[], saved:new Set(), open:null, note:"", comments:[], reply:null, convs:[], chat:null, chatId:null, msgs:[], timer:null};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const P = n => "P" + Number(n).toLocaleString("en-US");
+const catName = k => (CATS.find(c => c[0] === k) || [0,"Home"])[1];
+const size = n => n >= 10000 ? (n/10000) + " ha" : n + " m²";
+const meta = l => LAND.includes(l.property_type)
+  ? `${catName(l.property_type)} · ${size(l.size_sqm)} · ${esc(l.land_type || "")}`
+  : `${l.beds} bed · ${l.baths} bath · ${catName(l.property_type)}`;
+
+async function load() {
+  const r = await sb.from("listings").select("*").eq("active", true).order("created_at", {ascending:false}).limit(100);
+  S.list = r.data || [];
+  if (S.user) {
+    const a = await sb.from("saved").select("listing_id");
+    S.saved = new Set((a.data || []).map(x => x.listing_id));
+    const p = await sb.from("profiles").select("plan").eq("id", S.user.id).maybeSingle();
+    S.plan = (p.data && p.data.plan) || "free";
+  }
+  render();
+}
+function go(v) {
+  if (!S.user && ["post","saved","profile","inbox","chat"].includes(v)) v = "auth";
+  clearInterval(S.timer); if (v === "inbox") loadInbox();
+  S.view = v; S.note = ""; render(); window.scrollTo(0, 0);
+}
+async function openL(id) {
+  S.open = S.list.find(l => l.id === id); S.comments = []; S.reply = null; go("detail");
+  const r = await sb.from("comments").select("*").eq("listing_id", id).order("created_at");
+  S.comments = r.data || []; if (S.view === "detail") render();
+}
+async function toggleSave(id, e) {
+  e.stopPropagation();
+  if (!S.user) return go("auth");
+  if (S.saved.has(id)) { await sb.from("saved").delete().eq("listing_id", id); S.saved.delete(id); }
+  else { await sb.from("saved").insert({listing_id:id}); S.saved.add(id); }
+  render();
+}
+async function auth(kind) {
+  const email = $("em").value.trim(), password = $("pw").value;
+  const r = kind === "up" ? await sb.auth.signUp({email, password}) : await sb.auth.signInWithPassword({email, password});
+  if (r.error) { S.note = r.error.message; return render(); }
+  if (kind === "up" && !r.data.session) { S.note = "Check your email to confirm your account, then sign in."; render(); }
+}
+const google = () => sb.auth.signInWithOAuth({provider:"google", options:{redirectTo:location.href.split("#")[0]}});
+async function signOut() { await sb.auth.signOut(); }
+
+async function publish() {
+  const g = id => $(id).value.trim(), cat = g("pc"), land = LAND.includes(cat);
+  const mine = S.list.filter(l => l.owner === S.user.id).length;
+  const fail = m => { S.note = m; render(); window.scrollTo(0, 0); };
+  if (mine >= (LIMITS[S.plan] || 1)) return fail("You have reached your plan limit. Upgrade to post more.");
+  const f = $("pf").files[0], price = +g("pp"), wa = g("pw").replace(/\D/g, "");
+  if (!g("pt") || !g("pcity") || !(price > 0)) return fail("Please add a title, city and price.");
+  if (BAD.test(g("pt") + " " + g("parea"))) return fail("This looks unrelated to property, so it can't be posted.");
+  if (wa.length < 8 || wa.length > 15) return fail("Enter a valid WhatsApp number starting with 267.");
+  if (!f) return fail("Please add a photo.");
+  if (f.size > 5e6) return fail("Photo must be under 5 MB.");
+  if (land && !(+g("ps") > 0)) return fail("Please add the size in square metres.");
+  const path = `${S.user.id}/${Date.now()}-${f.name.replace(/[^\w.]/g, "")}`;
+  const up = await sb.storage.from("photos").upload(path, f);
+  if (up.error) return fail(up.error.message);
+  const url = sb.storage.from("photos").getPublicUrl(path).data.publicUrl;
+  const row = {title:g("pt"), mode:g("pm"), city:g("pcity"), area:g("parea"), price, whatsapp:wa, photo_urls:[url], property_type:cat,
+    beds: land ? null : +g("pb") || 1, baths: land ? null : +g("pba") || 1, size_sqm: land ? +g("ps") : null, land_type: land ? g("pl") : null};
+  const r = await sb.from("listings").insert(row);
+  if (r.error) return fail(r.error.message);
+  await load(); go("browse");
+}
+async function removeL(id) { await sb.from("listings").update({active:false}).eq("id", id); await load(); }
+
+const WARN = /https?:\/\/|www\.|(\d[ .-]?){7,}/i;
+const PLANS = [["free","Free","P0","1 listing"],["alert","House Hunter","P49/month","Instant alerts for new homes"],["agent","Agent Pro","P199/month","15 listings and Featured badge"],["agency","Agency","P599/month","Unlimited listings, top placement, 5 agents"]];
+const who = (id, l) => id === l.owner ? "Agent" : "Member " + id.slice(0, 4);
+const cm = (c, l, deep) => `<div style="margin:10px 0 0 ${deep ? 28 : 0}px"><div style="font-size:14px"><b>${who(c.author, l)}</b> <span class="mu">${new Date(c.created_at).toLocaleDateString()}</span></div><div>${esc(c.body)}</div><button style="border:0;background:none;color:var(--mu);min-height:36px;padding:0 12px 0 0" onclick="S.reply='${c.id}';render()">Reply</button><button style="border:0;background:none;color:var(--mu);min-height:36px" onclick="report('comment_id','${c.id}')">Report</button></div>`;
+async function sendComment() {
+  if (!S.user) return go("auth");
+  const t = $("cm").value.trim(); if (!t) return;
+  if (WARN.test(t) || BAD.test(t)) { S.note = "Phone numbers, links and unrelated content are not allowed in comments. Use Message to chat."; return render(); }
+  const r = await sb.from("comments").insert({listing_id:S.open.id, body:t, parent_id:S.reply});
+  if (r.error) { S.note = r.error.message; return render(); }
+  S.reply = null; const c = await sb.from("comments").select("*").eq("listing_id", S.open.id).order("created_at");
+  S.comments = c.data || []; render();
+}
+async function report(kind, id) {
+  if (!S.user) return go("auth");
+  const r = await sb.from("reports").insert({[kind]:id, reason:"user report"});
+  S.note = r.error ? r.error.message : "Thanks, we will review this."; render(); window.scrollTo(0, 0);
+}
+async function msgOwner() {
+  const l = S.open; if (!S.user) return go("auth");
+  if (l.owner === S.user.id) { S.note = "This is your own listing."; return render(); }
+  const r = await sb.from("conversations").select("*").eq("listing_id", l.id).eq("buyer", S.user.id).maybeSingle();
+  let c = r.data;
+  if (!c) { const n = await sb.from("conversations").insert({listing_id:l.id, seller:l.owner}).select().single(); if (n.error) { S.note = n.error.message; return render(); } c = n.data; }
+  openChat(c.id);
+}
+async function openChat(id) {
+  clearInterval(S.timer); S.chatId = id; S.msgs = []; S.chat = null; S.view = "chat"; S.note = "";
+  await loadMsgs(); S.timer = setInterval(() => { if (S.view === "chat") loadMsgs(true); }, 4000);
+}
+async function loadMsgs(quiet) {
+  const [c, m] = await Promise.all([sb.from("conversations").select("*").eq("id", S.chatId).single(), sb.from("messages").select("*").eq("conversation_id", S.chatId).order("created_at")]);
+  const n = m.data || [], changed = n.length !== S.msgs.length || !S.chat;
+  S.chat = c.data; S.msgs = n; if (!quiet || changed) render();
+}
+async function sendMsg() {
+  const t = $("msg").value.trim(); if (!t) return;
+  const r = await sb.from("messages").insert({conversation_id:S.chatId, body:t});
+  if (r.error) { S.note = r.error.message; return render(); }
+  await loadMsgs();
+}
+async function blockUser() {
+  const c = S.chat, o = c.buyer === S.user.id ? c.seller : c.buyer;
+  const r = await sb.from("blocks").insert({blocked:o});
+  S.note = r.error ? r.error.message : "User blocked. They can no longer message you."; render(); window.scrollTo(0, 0);
+}
+async function loadInbox() { const r = await sb.from("conversations").select("*").order("created_at", {ascending:false}); S.convs = r.data || []; if (S.view === "inbox") render(); }
+function vInbox() {
+  return `<h2>Messages</h2>${note()}${S.convs.map(c => { const l = S.list.find(x => x.id === c.listing_id); return `<div onclick="openChat('${c.id}')" style="padding:12px 0;border-bottom:1px solid var(--bd);cursor:pointer"><b>${esc(l ? l.title : "Listing")}</b><div class="mu">${c.buyer === S.user.id ? "You asked about this listing" : "Someone asked about your listing"}</div></div>`; }).join("") || '<p class="mu">No messages yet. Tap Message on a listing to start.</p>'}`;
+}
+function vChat() {
+  const c = S.chat, l = c && S.list.find(x => x.id === c.listing_id);
+  return `<button class="b o" onclick="go('inbox')">Back</button>${note()}<div style="margin:10px 0;padding:10px;border:1px solid var(--bd);border-radius:12px"><b>${esc(l ? l.title : "Listing")}</b><div class="mu">${l ? P(l.price) : ""}</div></div>
+  <div style="display:flex;flex-direction:column;gap:8px">${S.msgs.map(m => `<div style="max-width:78%;padding:10px 14px;border-radius:18px;${m.sender === S.user.id ? "align-self:flex-end;background:var(--ac);color:var(--onac)" : "align-self:flex-start;background:var(--bg)"}">${esc(m.body)}</div>`).join("")}</div>
+  <p class="mu" style="text-align:center">Never pay before viewing. <a href="#" onclick="report('conversation_id','${S.chatId}');return false" style="color:var(--mu)">Report</a> · <a href="#" onclick="blockUser();return false" style="color:var(--mu)">Block</a></p>
+  <div class="row" style="position:sticky;bottom:64px;background:var(--card);padding:8px 0"><input id="msg" aria-label="Message" placeholder="Write a message"><button class="b" style="flex:none" onclick="sendMsg()">Send</button></div>`;
+}
+function vPlans() {
+  return `<button class="b o" onclick="go('profile')">Back</button><h2>Plans</h2><p class="mu">Free for house hunters to browse. Agents pay to list more.</p>${PLANS.map(p => `<div style="border:${p[0] === S.plan ? "2px solid var(--ac)" : "1px solid var(--bd)"};border-radius:14px;padding:12px 14px;margin:10px 0;display:flex;justify-content:space-between"><div><b>${p[1]}</b><div class="mu">${p[3]}</div></div><b style="color:var(--ac)">${p[2]}</b></div>`).join("")}<div class="msg">Payments with Orange Money, Mascom MyZaka and card are coming soon.</div>`;
+}
+const card = l => `<div onclick="openL('${l.id}')" style="margin:14px 0;cursor:pointer"><div class="ph" style="${l.photo_urls && l.photo_urls[0] ? `background-image:url('${esc(l.photo_urls[0])}')` : ""}"><button class="heart" aria-label="Save" onclick="toggleSave('${l.id}',event)">${S.saved.has(l.id) ? "♥" : "♡"}</button></div><div style="padding:8px 2px"><b>${esc(l.area || l.city)}, ${esc(l.city)}</b><div class="mu">${meta(l)}</div><b>${P(l.price)}</b>${l.mode === "rent" ? " month" : ""}</div></div>`;
+const note = () => S.note ? `<div class="msg">${esc(S.note)}</div>` : "";
+const field = (id, l, t = "text", ph = "") => `<label for="${id}">${l}</label><input id="${id}" type="${t}" placeholder="${ph}">`;
+
+function vBrowse() {
+  const L = S.list.filter(l => l.mode === S.mode && l.property_type === S.cat && (!S.city || l.city === S.city) && (!S.max || l.price <= +S.max));
+  return `<h2 style="margin:8px 0">Home<span style="color:var(--ac)">BW</span></h2>
+  <div class="row"><button class="b${S.mode === "rent" ? "" : " o"}" onclick="S.mode='rent';render()">Rent</button><button class="b${S.mode === "buy" ? "" : " o"}" onclick="S.mode='buy';render()">Buy</button></div>
+  <div class="row" style="margin-top:8px"><select aria-label="City" onchange="S.city=this.value;render()"><option value="">All Botswana</option>${CITIES.map(c => `<option${c === S.city ? " selected" : ""}>${c}</option>`).join("")}</select><input type="number" inputmode="numeric" aria-label="Max price" placeholder="Max price (P)" value="${S.max}" onchange="S.max=this.value;render()"></div>
+  <div class="tabs">${CATS.map(([k, n]) => `<button class="${k === S.cat ? "on" : ""}" onclick="S.cat='${k}';render()">${n}</button>`).join("")}</div>
+  ${L.map(card).join("") || '<p class="mu" style="text-align:center;padding:30px 0">No listings here yet.</p>'}`;
+}
+function vDetail() {
+  const l = S.open, wa = `https://wa.me/${encodeURIComponent(l.whatsapp || "")}?text=${encodeURIComponent("Hi, I saw your listing on HomeBW: " + l.title)}`;
+  return `<button class="b o" onclick="go('browse')">Back</button>${note()}
+  <div class="ph" style="margin-top:10px;height:260px;${l.photo_urls && l.photo_urls[0] ? `background-image:url('${esc(l.photo_urls[0])}')` : ""}"></div>
+  <h2 style="margin:12px 0 2px">${esc(l.title)}</h2><div class="mu">${esc(l.area || "")} ${esc(l.city)} · ${meta(l)}</div>
+  <h2 style="color:var(--ac)">${P(l.price)}${l.mode === "rent" ? " / month" : ""}</h2>
+  <div class="row"><a class="b" style="flex:2;text-align:center;line-height:46px;text-decoration:none" href="${wa}" target="_blank" rel="noopener">WhatsApp</a><button class="b o" onclick="msgOwner()">Message</button></div>
+  <p class="mu">Never pay before viewing the property. <a href="#" onclick="report('listing_id','${l.id}');return false" style="color:var(--mu)">Report this listing</a></p>
+  <h3>Questions & comments (${S.comments.length})</h3>
+  ${S.comments.filter(c => !c.parent_id).map(c => cm(c, l, 0) + S.comments.filter(r => r.parent_id === c.id).map(r => cm(r, l, 1)).join("")).join("") || '<p class="mu">No questions yet.</p>'}
+  <p class="mu">Phone numbers and links are not allowed here. Use Message to chat.</p>
+  <div class="row" style="margin-top:8px"><input id="cm" aria-label="Comment" placeholder="${S.reply ? "Write a reply" : "Ask a question about this listing"}"><button class="b" style="flex:none" onclick="sendComment()">Post</button></div>`;
+}
+function vSaved() { const L = S.list.filter(l => S.saved.has(l.id)); return `<h2>Saved homes</h2>${L.map(card).join("") || '<p class="mu">Tap the heart on a listing to save it.</p>'}`; }
+function vPost() {
+  return `<h2>Post a listing</h2>${note()}<div class="msg">Your plan: ${esc(S.plan)}. Listings are checked, and ones unrelated to property are blocked.</div>
+  <label for="pc">What are you listing?</label><select id="pc" onchange="$('home').hidden=LAND.includes(this.value);$('land').hidden=!LAND.includes(this.value)">${CATS.map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select>
+  <label for="pm">For</label><select id="pm"><option value="rent">Rent</option><option value="buy">Sale</option></select>
+  ${field("pt", "Title", "text", "3 bedroom house in Phakalane")}
+  <div class="row"><div><label for="pcity">City</label><select id="pcity">${CITIES.map(c => `<option>${c}</option>`).join("")}</select></div><div>${field("parea", "Area", "text", "Phakalane")}</div></div>
+  ${field("pp", "Price (BWP)", "number")}
+  <div id="home" class="row"><div>${field("pb", "Bedrooms", "number")}</div><div>${field("pba", "Bathrooms", "number")}</div></div>
+  <div id="land" hidden><div class="row"><div>${field("ps", "Size (square metres)", "number")}</div><div><label for="pl">Land type</label><select id="pl">${TENURE.map(t => `<option>${t}</option>`).join("")}</select></div></div><div class="mu">1 hectare = 10,000 m²</div></div>
+  ${field("pw", "WhatsApp number (with 267)", "tel", "26771234567")}
+  <label for="pf">Photo</label><input id="pf" type="file" accept="image/*">
+  <button class="b" style="width:100%;margin-top:14px" onclick="publish()">Publish listing</button>`;
+}
+function vAuth() {
+  return `<h2 style="margin:8px 0">Welcome to Home<span style="color:var(--ac)">BW</span></h2><p class="mu">Find, rent or buy homes, plots and farms across Botswana.</p>${note()}
+  <button class="b o" style="width:100%" onclick="google()">Continue with Google</button><p class="mu" style="text-align:center">or use your email</p>
+  ${field("em", "Email", "email", "you@example.com")}${field("pw", "Password", "password", "At least 8 characters")}
+  <div class="row" style="margin-top:12px"><button class="b" onclick="auth('up')">Create account</button><button class="b o" onclick="auth('in')">Sign in</button></div>`;
+}
+function vProfile() {
+  const mine = S.list.filter(l => l.owner === S.user.id);
+  return `<h2>Profile</h2><p class="mu">${esc(S.user.email)}</p><div class="msg">Plan: <b>${esc(S.plan)}</b></div><button class="b" style="width:100%" onclick="go('plans')">See plans</button>
+  <h3>My listings (${mine.length})</h3>${mine.map(l => `<div class="row" style="align-items:center;margin:8px 0"><div><b>${esc(l.title)}</b><div class="mu">${P(l.price)}</div></div><button class="b o" style="flex:none" onclick="removeL('${l.id}')">Remove</button></div>`).join("") || '<p class="mu">Nothing posted yet.</p>'}
+  <button class="b o" style="width:100%;margin-top:16px" onclick="signOut()">Sign out</button>`;
+}
+function render() {
+  if (!ready) { $("app").innerHTML = '<h2>Almost there</h2><p>Open index.html and paste your Supabase URL and anon key at the top of the script.</p>'; return; }
+  const v = {browse:vBrowse, detail:vDetail, saved:vSaved, post:vPost, auth:vAuth, profile:vProfile, inbox:vInbox, chat:vChat, plans:vPlans}[S.view];
+  $("app").innerHTML = v(); if (S.view === "chat") window.scrollTo(0, document.body.scrollHeight);
+  $("nav").innerHTML = [["browse","Explore"],["saved","Saved"],["inbox","Messages"],["post","Post"],["profile","Profile"]].map(([k, n]) => `<button class="${S.view === k ? "on" : ""}" onclick="go('${k}')">${n}</button>`).join("");
+}
+if (ready) {
+  sb.auth.onAuthStateChange((_e, session) => { S.user = session ? session.user : null; if (S.user && S.view === "auth") S.view = "browse"; load(); });
+  load();
+} else render();
+</script>
+</body>
+</html>
